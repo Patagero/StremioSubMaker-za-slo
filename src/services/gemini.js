@@ -314,6 +314,11 @@ class GeminiService {
     let systemPrompt = (customPrompt || DEFAULT_TRANSLATION_PROMPT)
       .replace('{target_language}', normalizedTarget);
 
+    // Add gender context rule for Slovenian when using the default prompt
+    if (!customPrompt && (normalizedTarget.toLowerCase().includes('slovene') || normalizedTarget.toLowerCase().includes('slovenian'))) {
+          systemPrompt += '\\n6. Preserve gender context (ona/on) and maintain cross-line context for accurate gender inflection.\\n';
+    }
+
     // Add thinking-specific rules only when thinking is enabled (thinkingBudget !== 0)
     // When thinking is disabled (thinkingBudget === 0), these rules are unnecessary
     const effectiveThinkingBudget = this.getEffectiveThinkingBudget();

@@ -1190,8 +1190,9 @@ function getDefaultConfig(modelName = null) {
     topK: process.env.GEMINI_TOP_K !== undefined ? parseInt(process.env.GEMINI_TOP_K) : 40,
     topP: process.env.GEMINI_TOP_P !== undefined ? parseFloat(process.env.GEMINI_TOP_P) : 0.95,
     // Batch context: Include original surrounding context and previous translations for better coherence
-    // Disabled by default for performance (can be enabled for improved translation quality)
-    enableBatchContext: process.env.ENABLE_BATCH_CONTEXT === 'true' ? true : false,
+    // Enabled by default so subtitle translation has surrounding dialogue context
+    // and can maintain character/gender consistency across batches.
+    enableBatchContext: process.env.ENABLE_BATCH_CONTEXT !== 'false',
     contextSize: parseInt(process.env.BATCH_CONTEXT_SIZE) || 8, // Number of preceding original entries to include as context
     // Mismatch retries: number of times to retry a batch when AI returns wrong entry count (0-3, default: 1)
     mismatchRetries: process.env.MISMATCH_RETRIES !== undefined ? Math.max(0, Math.min(3, parseInt(process.env.MISMATCH_RETRIES))) : 1

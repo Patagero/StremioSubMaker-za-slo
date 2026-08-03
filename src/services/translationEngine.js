@@ -680,6 +680,7 @@ class TranslationEngine {
     }
 
     let translatedEntries = [];
+    const characterMemory = this.buildCharacterMemory(entries);
 
     // Parallel Batches Mode (Dev Mode specific, excluding ElfHosted)
     if (this.advancedSettings?.parallelBatchesEnabled === true && process.env.ELFHOSTED !== 'true') {
@@ -716,7 +717,7 @@ class TranslationEngine {
 
           // Prepare context for this batch (if enabled)
           const context = this.enableBatchContext
-            ? this.prepareContextForBatch(batch, entries, translatedEntries, batchIndex)
+            ? this.prepareContextForBatch(batch, entries, translatedEntries, batchIndex, characterMemory)
             : null;
 
           // Translate batch (with auto-chunking if needed)
@@ -792,6 +793,8 @@ class TranslationEngine {
             });
           }
 
+          this.updateCharacterMemory(characterMemory, batch, translatedBatch);
+
           // Update the completed SRT snapshot for streaming optimization
           completedEntryCount = translatedEntries.length;
           completedSRT = toSRT(translatedEntries);
@@ -854,8 +857,8 @@ class TranslationEngine {
       }
     }
 
-    // Step 5: Convert back to SRT format
-    return toSRT(translatedEntries);
+    // Step 5: Convert back to SRT format. Slovenian gets a final gender review.
+    return this.reviewSlovenianGender(toSRT(translatedEntries), entries, targetLanguage, characterMemory);
   }
 
   /**
@@ -901,6 +904,7 @@ class TranslationEngine {
     // Stats: update actual chunk count (may differ from the initial batchCount=1 set by caller)
     this.translationStats.batchCount = chunks.length;
     const translatedEntries = [];
+    const characterMemory = this.buildCharacterMemory(entries);
     // Track completed SRT from previous chunks so streaming partials include all progress
     let completedChunksSRT = '';
     let completedChunksEntryCount = 0;
@@ -914,7 +918,7 @@ class TranslationEngine {
 
       // Preserve coherence when the "single-batch" path auto-splits by reusing the same context builder
       const context = this.enableBatchContext
-        ? this.prepareContextForBatch(batch, entries, translatedEntries, batchIndex)
+        ? this.prepareContextForBatch(batch, entries, translatedEntries, batchIndex, characterMemory)
         : null;
 
       // Capture accumulated state for the streaming closure
@@ -969,6 +973,8 @@ class TranslationEngine {
         });
       }
 
+      this.updateCharacterMemory(characterMemory, batch, translatedBatch);
+
       // Update accumulated SRT snapshot for next chunk's streaming closure
       completedChunksEntryCount = translatedEntries.length;
       completedChunksSRT = toSRT(translatedEntries);
@@ -1003,7 +1009,7 @@ class TranslationEngine {
 
     log.info(() => `[TranslationEngine] Single-batch translation completed: ${translatedEntries.length} entries (tokens: est ${estimatedTokens}${actualTokenCount ? `, actual ${actualTokenCount}` : ''})`);
 
-    return toSRT(translatedEntries);
+    return this.reviewSlovenianGender(toSRT(translatedEntries), entries, targetLanguage, characterMemory);
   }
 
   /**
@@ -1038,17 +1044,17 @@ class TranslationEngine {
    * @param {number} batchIndex - Current batch index
    * @returns {Object} - Context object with surrounding and previous entries
    */
-  prepareContextForBatch(batch, allOriginalEntries, translatedSoFar, batchIndex) {
+  prepareContextForBatch(batch, allOriginalEntries, translatedSoFar, batchIndex, characterMemory = {}) {
     if (!this.enableBatchContext) {
       return null;
     }
 
-    const firstEntryId = batch[0].id;
-    const lastEntryId = batch[batch.length - 1].id;
+    const firstIndex = allOriginalEntries.indexOf(batch[0]);
+    const lastIndex = allOriginalEntries.indexOf(batch[batch.length - 1]);
 
     // Get surrounding context from original entries (before the batch)
-    const surroundingStartIdx = Math.max(0, firstEntryId - 1 - this.contextSize);
-    const surroundingEndIdx = firstEntryId - 2;
+    const surroundingStartIdx = Math.max(0, firstIndex - this.contextSize);
+    const surroundingEndIdx = firstIndex - 1;
     const surroundingContext = [];
 
     for (let i = surroundingStartIdx; i <= surroundingEndIdx && i < allOriginalEntries.length; i++) {
@@ -1061,12 +1067,76 @@ class TranslationEngine {
       }
     }
 
-    // Only include context if this is NOT the first batch
-    const hasContext = batchIndex > 0 && surroundingContext.length > 0;
+    const followingContext = [];
+    const followingEndIdx = Math.min(allOriginalEntries.length - 1, lastIndex + this.contextSize);
+    for (let i = lastIndex + 1; i <= followingEndIdx; i++) {
+      if (allOriginalEntries[i]) followingContext.push({ id: allOriginalEntries[i].id, text: allOriginalEntries[i].text, timecode: allOriginalEntries[i].timecode });
+    }
+    const previousTranslations = (translatedSoFar || []).slice(-this.contextSize).map(entry => ({ id: entry.id, text: entry.text }));
+    const hasContext = surroundingContext.length > 0 || followingContext.length > 0 || previousTranslations.length > 0 || Object.keys(characterMemory).length > 0;
 
     return hasContext ? {
-      surroundingOriginal: surroundingContext
+      surroundingOriginal: surroundingContext,
+      followingOriginal: followingContext,
+      previousTranslations,
+      characterMemory
     } : null;
+  }
+
+  buildCharacterMemory(entries = []) {
+    const memory = {};
+    for (const entry of entries) {
+      const text = String(entry?.text || '');
+      const match = text.match(/^\s*([\p{L}][\p{L} ._'’-]{1,40})\s*:\s*/u);
+      if (!match) continue;
+      const name = match[1].trim();
+      const lower = text.toLowerCase();
+      let gender = 'unknown';
+      if (/\b(she|her|woman|girl|female|ona|bila|šla|naredila|utrujena)\b/i.test(lower)) gender = 'female';
+      if (/\b(he|him|man|boy|male|on|bil|šel|naredil|utrujen)\b/i.test(lower)) gender = 'male';
+      const current = memory[name] || { gender: 'unknown', evidence: [] };
+      if (gender !== 'unknown') current.gender = gender;
+      if (gender !== 'unknown') current.evidence = [...new Set([...current.evidence, text.slice(0, 160)])].slice(-4);
+      memory[name] = current;
+    }
+    return memory;
+  }
+
+  updateCharacterMemory(memory, batch, translatedBatch) {
+    const discovered = this.buildCharacterMemory([...(batch || []), ...(translatedBatch || [])]);
+    for (const [name, value] of Object.entries(discovered)) {
+      const current = memory[name] || { gender: 'unknown', evidence: [] };
+      if (current.gender === 'unknown' && value.gender !== 'unknown') current.gender = value.gender;
+      current.evidence = [...new Set([...(current.evidence || []), ...(value.evidence || [])])].slice(-4);
+      memory[name] = current;
+    }
+  }
+
+  isSlovenianTarget(targetLanguage) {
+    const value = String(targetLanguage || '').toLowerCase();
+    return value.includes('sloven') || value === 'sl' || value === 'slv';
+  }
+
+  createSlovenianGenderReviewPrompt(translatedSrt, sourceEntries = [], characterMemory = {}) {
+    const source = sourceEntries.map(entry => `${entry.id}\n${entry.timecode}\n${entry.text}`).join('\n\n');
+    return `Review this Slovenian subtitle translation for gender accuracy.\n\nCorrect ona/on pronouns, masculine/feminine verb and adjective forms, and agreement. Preserve meaning, timing, numbering, formatting, and line breaks. Return ONLY valid SRT.\n\nCHARACTER MEMORY:\n${JSON.stringify(characterMemory)}\n\nSOURCE:\n${source}\n\nTRANSLATION TO REVIEW:\n${translatedSrt}`;
+  }
+
+  async reviewSlovenianGender(translatedSrt, sourceEntries, targetLanguage, characterMemory) {
+    if (!this.isSlovenianTarget(targetLanguage) || typeof this.gemini?.translateSubtitle !== 'function') return translatedSrt;
+    try {
+      const reviewed = await this.gemini.translateSubtitle(translatedSrt, 'Slovenian', 'Slovenian', this.createSlovenianGenderReviewPrompt(translatedSrt, sourceEntries, characterMemory));
+      const reviewedEntries = parseSRT(reviewed);
+      const originalEntries = parseSRT(translatedSrt);
+      if (!reviewedEntries || !originalEntries || reviewedEntries.length !== originalEntries.length) {
+        log.warn(() => '[TranslationEngine] Slovenian gender review returned an invalid entry count; keeping initial translation');
+        return translatedSrt;
+      }
+      return toSRT(reviewedEntries.map((entry, index) => ({ ...entry, id: originalEntries[index].id, timecode: originalEntries[index].timecode })));
+    } catch (error) {
+      log.warn(() => `[TranslationEngine] Slovenian gender review failed; keeping initial translation: ${error.message}`);
+      return translatedSrt;
+    }
   }
 
   /**
@@ -1692,6 +1762,25 @@ class TranslationEngine {
       result += '=== ENTRIES TO TRANSLATE (translate these) ===\n\n';
     }
 
+    if (context?.followingOriginal?.length > 0) {
+      result += '=== FOLLOWING CONTEXT (FOR REFERENCE ONLY - DO NOT TRANSLATE) ===\n\n';
+      context.followingOriginal.forEach((entry, index) => {
+        result += `[Following ${index + 1}] ${entry.text.trim().replace(/\n+/g, '\n')}\n\n`;
+      });
+      result += '=== END OF FOLLOWING CONTEXT ===\n\n';
+    }
+
+    if (context?.previousTranslations?.length > 0 || Object.keys(context?.characterMemory || {}).length > 0) {
+      result += '=== CONSISTENCY MEMORY (FOR REFERENCE ONLY - DO NOT TRANSLATE) ===\n\n';
+      if (context.previousTranslations?.length > 0) {
+        result += `Previous translations:\n${context.previousTranslations.map(entry => `[${entry.id}] ${entry.text}`).join('\n')}\n\n`;
+      }
+      if (Object.keys(context.characterMemory || {}).length > 0) {
+        result += `Character memory: ${JSON.stringify(context.characterMemory)}\n\n`;
+      }
+      result += '=== END OF CONSISTENCY MEMORY ===\n\n';
+    }
+
     // Add batch entries to translate
     const batchText = batch.map((entry, index) => {
       const num = index + 1;
@@ -1735,6 +1824,25 @@ class TranslationEngine {
       result += '=== ENTRIES TO TRANSLATE ===\n\n';
     }
 
+    if (context?.followingOriginal?.length > 0) {
+      result += '=== FOLLOWING CONTEXT (FOR REFERENCE ONLY - DO NOT TRANSLATE) ===\n\n';
+      context.followingOriginal.forEach((entry, index) => {
+        result += `[Following ${index + 1}] ${entry.text.trim().replace(/\n+/g, '\n')}\n\n`;
+      });
+      result += '=== END OF FOLLOWING CONTEXT ===\n\n';
+    }
+
+    if (context?.previousTranslations?.length > 0 || Object.keys(context?.characterMemory || {}).length > 0) {
+      result += '=== CONSISTENCY MEMORY (FOR REFERENCE ONLY - DO NOT TRANSLATE) ===\n\n';
+      if (context.previousTranslations?.length > 0) {
+        result += `Previous translations:\n${context.previousTranslations.map(entry => `[${entry.id}] ${entry.text}`).join('\n')}\n\n`;
+      }
+      if (Object.keys(context.characterMemory || {}).length > 0) {
+        result += `Character memory: ${JSON.stringify(context.characterMemory)}\n\n`;
+      }
+      result += '=== END OF CONSISTENCY MEMORY ===\n\n';
+    }
+
     const xmlEntries = batch.map((entry, index) => {
       const num = index + 1;
       const cleanText = entry.text.trim().replace(/\n+/g, '\n');
@@ -1760,6 +1868,35 @@ CONTEXT PROVIDED:
 - ONLY translate entries inside <s id="N"> tags
 
 `;
+    }
+    if (context?.followingOriginal?.length > 0) {
+      contextInstructions += `
+FOLLOWING CONTEXT PROVIDED:
+- Following entries are reference only and must not be translated
+- Use them to resolve references, speakers, and gender consistently
+
+`;
+    }
+    if (context?.previousTranslations?.length > 0 || Object.keys(context?.characterMemory || {}).length > 0) {
+      contextInstructions += `
+CONSISTENCY MEMORY PROVIDED:
+- Keep each character's gender consistent across all entries
+- For Slovenian, preserve ona/on and correct masculine/feminine verb and adjective agreement
+- Do not output this memory
+
+`;
+      if (context?.previousTranslations?.length > 0) {
+        contextInstructions += `PREVIOUS TRANSLATIONS:
+${context.previousTranslations.map(entry => `[${entry.id}] ${entry.text}`).join('\n')}
+
+`;
+      }
+      if (Object.keys(context?.characterMemory || {}).length > 0) {
+        contextInstructions += `CHARACTER MEMORY:
+${JSON.stringify(context.characterMemory)}
+
+`;
+      }
     }
 
     const promptBody = `You are a professional subtitle translator. Translate to ${targetLabel}.
@@ -1801,9 +1938,17 @@ OUTPUT (EXACTLY ${expectedCount} XML-tagged entries):`;
     }));
 
     // Include context as structured metadata when provided
-    if (context?.surroundingOriginal?.length > 0) {
+    if (context && (
+      context.surroundingOriginal?.length > 0 ||
+      context.followingOriginal?.length > 0 ||
+      context.previousTranslations?.length > 0 ||
+      Object.keys(context.characterMemory || {}).length > 0
+    )) {
       const ctx = {
-        preceding: context.surroundingOriginal.map(e => e.text.trim().replace(/\n+/g, '\n'))
+        preceding: (context.surroundingOriginal || []).map(e => e.text.trim().replace(/\n+/g, '\n')),
+        following: (context.followingOriginal || []).map(e => e.text.trim().replace(/\n+/g, '\n')),
+        previousTranslations: context.previousTranslations || [],
+        characterMemory: context.characterMemory || {}
       };
       return JSON.stringify({ __context: ctx, entries }, null, 0);
     }
@@ -1819,11 +1964,16 @@ OUTPUT (EXACTLY ${expectedCount} XML-tagged entries):`;
     const targetLabel = normalizeTargetLanguageForPrompt(targetLanguage);
 
     let contextInstructions = '';
-    if (context?.surroundingOriginal?.length > 0) {
+    if (context && (
+      context.surroundingOriginal?.length > 0 ||
+      context.followingOriginal?.length > 0 ||
+      context.previousTranslations?.length > 0 ||
+      Object.keys(context.characterMemory || {}).length > 0
+    )) {
       contextInstructions = `
 CONTEXT PROVIDED:
-- The input includes a "__context" object with the preceding original source text
-- Use context to understand dialogue flow, character names, and consistency
+- The input includes a "__context" object with preceding/following source text, previous translations, and character memory
+- Use context to understand dialogue flow, character names, and gender consistency
 - DO NOT include __context in your output — translate ONLY the "entries" array
 
 `;

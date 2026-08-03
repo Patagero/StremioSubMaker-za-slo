@@ -4692,6 +4692,21 @@ async function regenerateDefaultConfig() {
 
 function createMissingSessionConfig(configStr) {
     const defaultConfig = getDefaultConfig();
+    const fallbackGeminiApiKey = String(process.env.GEMINI_API_KEY || '').trim();
+
+    // If the session token is missing/expired, use the server-level Gemini key as
+    // a safe fallback instead of blocking subtitle searches and downloads. This
+    // keeps the addon usable after a session store reset while never inventing a
+    // user configuration or exposing the missing token as a valid session.
+    if (fallbackGeminiApiKey) {
+        defaultConfig.geminiApiKey = fallbackGeminiApiKey;
+        defaultConfig.geminiApiKeys = [fallbackGeminiApiKey];
+        defaultConfig.geminiKeyRotationEnabled = false;
+        ensureConfigHash(defaultConfig, configStr);
+        log.warn(() => `[ConfigResolver] Session token missing/expired; using GEMINI_API_KEY fallback for ${redactToken(configStr)}`);
+        return defaultConfig;
+    }
+
     defaultConfig.__sessionTokenError = true;
     defaultConfig.__originalToken = configStr;
     ensureConfigHash(defaultConfig, configStr);

@@ -4841,10 +4841,16 @@ async function resolveConfigAsync(configStr, req) {
         log.warn(() => `[Stremio Kai] Session token not found: ${configStr.substring(0, 8)}...`);
     }
 
-    // Session token not found - return default config with error flag
-    // NOTE: We do NOT create a new session here - that should only happen via /api/get-session?autoRegenerate=true
-    // Creating tokens here would result in multiple tokens being generated during page load
-    log.warn(() => `[ConfigResolver] Session token not found: ${configStr.substring(0, 8)}..., returning default config with error flag`);
+    // Session token not found. If GEMINI_API_KEY is configured, createMissingSessionConfig()
+    // returns a server-key fallback without the session-error flag; otherwise it returns
+    // the normal error config. Do not log the error wording for the fallback path.
+    // NOTE: We do NOT create a new session here - that should only happen via
+    // /api/get-session?autoRegenerate=true.
+    if (process.env.GEMINI_API_KEY) {
+        log.warn(() => `[ConfigResolver] Session token not found: ${redactToken(configStr)}; server Gemini fallback will be used`);
+    } else {
+        log.warn(() => `[ConfigResolver] Session token not found: ${redactToken(configStr)}, returning default config with error flag`);
+    }
     missingSessionTokenCache.set(configStr, true);
 
     // SECURITY: Do NOT cache error/fallback configs

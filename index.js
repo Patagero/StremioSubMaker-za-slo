@@ -94,6 +94,7 @@ const { isBlockedCommunityV5Request, isStremioKaiRequest } = require('./src/util
 const { loadLocale, getTranslator, DEFAULT_LANG } = require('./src/utils/i18n');
 const { incrementCounter, CACHE_PREFIXES, CACHE_TTLS } = require('./src/utils/sharedCache');
 const { loadChangelog } = require('./src/utils/changelog');
+const { probeStream, extractSubtitle } = require('./src/services/embeddedStreamSubtitles');
 
 // Cache-buster path segment for temporary HA cache invalidation
 // Default to current package version so it auto-advances on releases
@@ -8393,6 +8394,41 @@ app.use((error, req, res, next) => {
     });
 
     res.status(500).json({ error: t('server.errors.internalServerError', {}, 'Internal server error') });
+});
+
+// Embedded-stream fallback: Stremio can pass a direct stream URL through the
+// subtitle request. These routes are intentionally additive; provider lookup
+// remains unchanged when no stream URL is supplied.
+const embeddedStreamCache = new Map();
+
+app.post('/api/embedded-stream/tracks', async (req, res) => {
+    try {
+        res.json({ tracks: await probeStream(req.body?.streamUrl) });
+    } catch (error) {
+        log.warn(() => `[Embedded Stream] Track probe failed: ${error.message}`);
+        res.status(400).json({ error: error.message || 'Unable to inspect stream' });
+    }
+});
+
+app.post('/api/embedded-stream/translate', async (req, res) => {
+    const apiKey = String(process.env.GEMINI_API_KEY || '').trim();
+    if (!apiKey) return res.status(503).json({ error: 'GEMINI_API_KEY is not configured' });
+    try {
+        const { streamUrl, streamIndex, targetLanguage = 'Slovenian' } = req.body || {};
+        const cacheKey = `${String(streamUrl)}|${String(streamIndex)}|${String(targetLanguage)}`;
+        let sourceSrt = embeddedStreamCache.get(cacheKey);
+        if (!sourceSrt) {
+            sourceSrt = await extractSubtitle(streamUrl, streamIndex);
+            embeddedStreamCache.set(cacheKey, sourceSrt);
+        }
+        const defaultConfig = getDefaultConfig();
+        const gemini = new GeminiService(apiKey, process.env.GEMINI_MODEL || 'gemini-flash-lite-latest', defaultConfig.advancedSettings);
+        const engine = new TranslationEngine(gemini, gemini.model, { ...(defaultConfig.advancedSettings || {}), enableBatchContext: true, contextSize: 8, translationWorkflow: 'xml' }, { providerName: 'gemini', enableStreaming: false });
+        res.type('application/x-subrip').send(await engine.translateSubtitle(sourceSrt, targetLanguage));
+    } catch (error) {
+        log.warn(() => `[Embedded Stream] Translation failed: ${error.message}`);
+        res.status(400).json({ error: error.message || 'Unable to translate embedded subtitles' });
+    }
 });
 
 // Initialize caches and session manager, then start server

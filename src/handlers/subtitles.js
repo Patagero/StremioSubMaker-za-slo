@@ -22,6 +22,7 @@ const autoSubCache = require('../utils/autoSubCache');
 const streamActivity = require('../utils/streamActivity');
 const embeddedCache = require('../utils/embeddedCache');
 const { detectEmbeddedSubtitleFormat } = require('../utils/embeddedSubtitleDelivery');
+const { probeStream, extractSubtitle } = require('../services/embeddedStreamSubtitles');
 const smdbCache = require('../utils/smdbCache');
 const { resolveLocalSubtitleHashes, persistLocalHashAssociations } = require('../utils/localSubtitleHashResolver');
 const { StorageFactory, StorageAdapter } = require('../storage');
@@ -2684,6 +2685,7 @@ function createSubtitleHandler(config) {
 
       log.debug(() => `[Subtitles] Video info: ${JSON.stringify(videoInfo)}`);
       const streamFilename = (extra?.filename || '').toString().trim();
+      const embeddedStreamUrl = String(extra?.streamUrl || extra?.streamURL || extra?.videoUrl || '').trim();
 
       await resolveVideoInfoForSearch(videoInfo, type, 'Subtitles', { streamFilename });
 
@@ -3290,6 +3292,30 @@ function createSubtitleHandler(config) {
 
         // Add embedded originals as source subtitles when they match configured source languages
         const embeddedSourceSubtitles = [];
+        if (embeddedStreamUrl && config.sourceLanguages.some(sourceLang => ['en', 'eng'].includes(normalizeLanguageCode(sourceLang)))) {
+          try {
+            const embeddedTracks = await probeStream(embeddedStreamUrl);
+            const preferredTrack = embeddedTracks.find(track => /^(en|eng)$/i.test(track.language)) || embeddedTracks.find(track => !track.forced);
+            if (preferredTrack) {
+              const embeddedContent = await extractSubtitle(embeddedStreamUrl, preferredTrack.streamIndex);
+              const embeddedHash = deriveVideoHash(streamFilename || embeddedStreamUrl, id);
+              const saved = await embeddedCache.saveOriginalEmbedded(
+                embeddedHash,
+                `stream_${preferredTrack.streamIndex}`,
+                preferredTrack.language || 'eng',
+                embeddedContent,
+                { sourceFormat: 'srt', codec: preferredTrack.codec, title: preferredTrack.title, streamUrl: embeddedStreamUrl }
+              );
+              embeddedSourceSubtitles.push({
+                fileId: `xembed_${saved.cacheKey}`,
+                languageCode: normalizeLanguageCode(preferredTrack.language || 'eng') || 'eng'
+              });
+              log.info(() => `[Subtitles] Added embedded stream subtitle track ${preferredTrack.streamIndex} as a translation source`);
+            }
+          } catch (error) {
+            log.warn(() => `[Subtitles] Embedded stream fallback unavailable: ${error.message}`);
+          }
+        }
         for (const hash of videoHashes) {
           const originals = embeddedOriginalsByHash.get(hash) || [];
           for (const entry of originals) {

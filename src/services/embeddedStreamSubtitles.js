@@ -32,6 +32,13 @@ function parseProbeOutput(stdout) {
     }));
 }
 
+function selectPreferredEnglishTrack(tracks) {
+  return (Array.isArray(tracks) ? tracks : [])
+    .filter(track => /^(en|eng|english)$/i.test(String(track?.language || '').trim()))
+    .filter(track => track?.forced !== true)
+    .sort((a, b) => Number(b?.default === true) - Number(a?.default === true))[0] || null;
+}
+
 async function probeStream(streamUrl) {
   const url = validateStreamUrl(streamUrl);
   const { stdout } = await execFileAsync('ffprobe', [
@@ -61,6 +68,7 @@ module.exports = {
   createJobId,
   extractSubtitle,
   parseProbeOutput,
+  selectPreferredEnglishTrack,
   probeStream,
   validateStreamUrl
 };

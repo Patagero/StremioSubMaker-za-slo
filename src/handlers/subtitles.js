@@ -22,7 +22,7 @@ const autoSubCache = require('../utils/autoSubCache');
 const streamActivity = require('../utils/streamActivity');
 const embeddedCache = require('../utils/embeddedCache');
 const { detectEmbeddedSubtitleFormat } = require('../utils/embeddedSubtitleDelivery');
-const { probeStream, extractSubtitle } = require('../services/embeddedStreamSubtitles');
+const { probeStream, extractSubtitle, selectPreferredEnglishTrack } = require('../services/embeddedStreamSubtitles');
 const smdbCache = require('../utils/smdbCache');
 const { resolveLocalSubtitleHashes, persistLocalHashAssociations } = require('../utils/localSubtitleHashResolver');
 const { StorageFactory, StorageAdapter } = require('../storage');
@@ -2685,7 +2685,16 @@ function createSubtitleHandler(config) {
 
       log.debug(() => `[Subtitles] Video info: ${JSON.stringify(videoInfo)}`);
       const streamFilename = (extra?.filename || '').toString().trim();
-      const embeddedStreamUrl = String(extra?.streamUrl || extra?.streamURL || extra?.videoUrl || '').trim();
+      const embeddedStreamUrl = String(
+        extra?.streamUrl
+        || extra?.streamURL
+        || extra?.videoUrl
+        || extra?.videoURL
+        || extra?.stream_url
+        || extra?.video_url
+        || extra?.url
+        || ''
+      ).trim();
 
       await resolveVideoInfoForSearch(videoInfo, type, 'Subtitles', { streamFilename });
 
@@ -3295,7 +3304,7 @@ function createSubtitleHandler(config) {
         if (embeddedStreamUrl && config.sourceLanguages.some(sourceLang => ['en', 'eng'].includes(normalizeLanguageCode(sourceLang)))) {
           try {
             const embeddedTracks = await probeStream(embeddedStreamUrl);
-            const preferredTrack = embeddedTracks.find(track => /^(en|eng)$/i.test(track.language)) || embeddedTracks.find(track => !track.forced);
+            const preferredTrack = selectPreferredEnglishTrack(embeddedTracks);
             if (preferredTrack) {
               const embeddedContent = await extractSubtitle(embeddedStreamUrl, preferredTrack.streamIndex);
               const embeddedHash = deriveVideoHash(streamFilename || embeddedStreamUrl, id);

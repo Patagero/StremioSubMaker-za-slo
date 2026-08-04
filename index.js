@@ -8410,6 +8410,19 @@ app.post('/api/embedded-stream/tracks', async (req, res) => {
     }
 });
 
+// Extract one text subtitle track for native clients. This is additive to
+// track probing and keeps the existing Stremio addon behavior unchanged.
+app.post('/api/embedded-stream/extract', async (req, res) => {
+    try {
+        const streamIndex = Number(req.body?.streamIndex);
+        const content = await extractSubtitle(req.body?.streamUrl, streamIndex);
+        res.json({ content, streamIndex });
+    } catch (error) {
+        log.warn(() => `[Embedded Stream] Track extraction failed: ${error.message}`);
+        res.status(400).json({ error: error.message || 'Unable to extract embedded subtitle' });
+    }
+});
+
 app.post('/api/embedded-stream/translate', async (req, res) => {
     const apiKey = String(process.env.GEMINI_API_KEY || '').trim();
     if (!apiKey) return res.status(503).json({ error: 'GEMINI_API_KEY is not configured' });
@@ -8428,6 +8441,38 @@ app.post('/api/embedded-stream/translate', async (req, res) => {
     } catch (error) {
         log.warn(() => `[Embedded Stream] Translation failed: ${error.message}`);
         res.status(400).json({ error: error.message || 'Unable to translate embedded subtitles' });
+    }
+});
+
+// Native STRMR subtitle hook: translate downloaded SRT content without a
+// Stremio session token. The Android client sends subtitle text only.
+app.post('/api/translate-client-subtitle', async (req, res) => {
+    const apiKey = String(process.env.GEMINI_API_KEY || '').trim();
+    if (!apiKey) return res.status(503).json({ error: 'GEMINI_API_KEY is not configured' });
+    try {
+        const content = typeof req.body?.content === 'string' ? req.body.content : '';
+        const targetLanguage = typeof req.body?.targetLanguage === 'string' && req.body.targetLanguage.trim()
+            ? req.body.targetLanguage.trim()
+            : 'Slovenian';
+        if (!content || content.length > 5 * 1024 * 1024) {
+            return res.status(400).json({ error: 'Invalid or oversized subtitle content' });
+        }
+        const defaultConfig = getDefaultConfig();
+        const gemini = new GeminiService(apiKey, process.env.GEMINI_MODEL || 'gemini-flash-lite-latest', {
+            ...(defaultConfig.advancedSettings || {}),
+            enableBatchContext: true
+        });
+        const engine = new TranslationEngine(
+            gemini,
+            gemini.model,
+            { ...(defaultConfig.advancedSettings || {}), enableBatchContext: true, contextSize: 8, translationWorkflow: 'xml' },
+            { providerName: 'gemini', enableStreaming: false }
+        );
+        const translatedContent = await engine.translateSubtitle(content, targetLanguage, null, null);
+        res.json({ success: true, translatedContent, entryCount: engine.translationStats.entryCount });
+    } catch (error) {
+        log.warn(() => `[Client Subtitle] Translation failed: ${error.message}`);
+        res.status(400).json({ error: error.message || 'Unable to translate subtitle' });
     }
 });
 

@@ -382,7 +382,9 @@ function getPrefixVariants() {
 }
 
 async function getPubSubClient() {
-    const storageType = process.env.STORAGE_TYPE || 'redis';
+    const configuredStorageType = String(process.env.STORAGE_TYPE || '').trim().toLowerCase();
+    const hasRedisConfig = Boolean(process.env.REDIS_URL || process.env.REDIS_HOST || process.env.REDISHOST);
+    const storageType = configuredStorageType || (hasRedisConfig ? 'redis' : 'filesystem');
     if (storageType !== 'redis') {
         return null; // Not needed in filesystem mode
     }
@@ -443,7 +445,9 @@ async function getPubSubClient() {
 }
 
 async function getPublishClient() {
-    const storageType = process.env.STORAGE_TYPE || 'redis';
+    const configuredStorageType = String(process.env.STORAGE_TYPE || '').trim().toLowerCase();
+    const hasRedisConfig = Boolean(process.env.REDIS_URL || process.env.REDIS_HOST || process.env.REDISHOST);
+    const storageType = configuredStorageType || (hasRedisConfig ? 'redis' : 'filesystem');
     if (storageType !== 'redis') {
         return null; // Not needed in filesystem mode
     }
@@ -667,7 +671,9 @@ class SessionManager extends EventEmitter {
      */
     async _initializeSessions() {
         try {
-            const storageType = process.env.STORAGE_TYPE || 'redis';
+            const configuredStorageType = String(process.env.STORAGE_TYPE || '').trim().toLowerCase();
+    const hasRedisConfig = Boolean(process.env.REDIS_URL || process.env.REDIS_HOST || process.env.REDISHOST);
+    const storageType = configuredStorageType || (hasRedisConfig ? 'redis' : 'filesystem');
             const sessionPreloadEnabled = process.env.SESSION_PRELOAD === 'true';
 
             // Log TTL configuration for visibility
@@ -1722,7 +1728,9 @@ class SessionManager extends EventEmitter {
      * @returns {Promise<Object>} Statistics
      */
     async getStats() {
-        const storageType = process.env.STORAGE_TYPE || 'redis';
+        const configuredStorageType = String(process.env.STORAGE_TYPE || '').trim().toLowerCase();
+    const hasRedisConfig = Boolean(process.env.REDIS_URL || process.env.REDIS_HOST || process.env.REDISHOST);
+    const storageType = configuredStorageType || (hasRedisConfig ? 'redis' : 'filesystem');
         const storageCount = await this.getStorageSessionCount();
 
         return {
@@ -2004,7 +2012,9 @@ class SessionManager extends EventEmitter {
      * @returns {Promise<void>}
      */
     async saveToDisk() {
-        const storageType = process.env.STORAGE_TYPE || 'redis';
+        const configuredStorageType = String(process.env.STORAGE_TYPE || '').trim().toLowerCase();
+    const hasRedisConfig = Boolean(process.env.REDIS_URL || process.env.REDIS_HOST || process.env.REDISHOST);
+    const storageType = configuredStorageType || (hasRedisConfig ? 'redis' : 'filesystem');
         const isRedisMode = storageType === 'redis';
 
         // In Redis mode, ALWAYS save in-memory sessions during shutdown to ensure
@@ -2055,7 +2065,9 @@ class SessionManager extends EventEmitter {
         // In HA/Redis mode, optionally skip preloading all sessions to avoid
         // SCAN + GET overhead across large datasets. Rely on lazy
         // loadSessionFromStorage() when tokens are accessed.
-        const storageType = process.env.STORAGE_TYPE || 'redis';
+        const configuredStorageType = String(process.env.STORAGE_TYPE || '').trim().toLowerCase();
+    const hasRedisConfig = Boolean(process.env.REDIS_URL || process.env.REDIS_HOST || process.env.REDISHOST);
+    const storageType = configuredStorageType || (hasRedisConfig ? 'redis' : 'filesystem');
         const preloadEnabled = process.env.SESSION_PRELOAD === 'true';
         if (storageType === 'redis' && !preloadEnabled) {
             log.debug(() => '[SessionManager] Skipping session preload in Redis mode (SESSION_PRELOAD!=true)');
@@ -2158,7 +2170,9 @@ class SessionManager extends EventEmitter {
      */
     async restoreFromSnapshotIfStorageEmpty() {
         try {
-            const storageType = process.env.STORAGE_TYPE || 'redis';
+            const configuredStorageType = String(process.env.STORAGE_TYPE || '').trim().toLowerCase();
+    const hasRedisConfig = Boolean(process.env.REDIS_URL || process.env.REDIS_HOST || process.env.REDISHOST);
+    const storageType = configuredStorageType || (hasRedisConfig ? 'redis' : 'filesystem');
             if (storageType !== 'redis') {
                 return;
             }

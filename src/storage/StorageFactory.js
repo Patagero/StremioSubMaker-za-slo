@@ -53,14 +53,17 @@ class StorageFactory {
    * @returns {Promise<StorageAdapter>}
    */
   static async _initializeAdapter() {
-    const storageType = process.env.STORAGE_TYPE || 'redis';
+    const configuredStorageType = String(process.env.STORAGE_TYPE || '').trim().toLowerCase();
+    const hasRedisConfig = Boolean(process.env.REDIS_URL || process.env.REDIS_HOST || process.env.REDISHOST);
+    const storageType = configuredStorageType || (hasRedisConfig ? 'redis' : 'filesystem');
 
     let adapter;
 
     if (storageType === 'redis') {
       log.debug(() => 'Initializing Redis storage adapter...');
       adapter = new RedisStorageAdapter({
-        host: process.env.REDIS_HOST,
+        url: process.env.REDIS_URL,
+        host: process.env.REDIS_HOST || process.env.REDISHOST,
         port: process.env.REDIS_PORT ? parseInt(process.env.REDIS_PORT, 10) : undefined,
         password: getRedisPassword() || undefined,
         db: process.env.REDIS_DB ? parseInt(process.env.REDIS_DB, 10) : undefined,

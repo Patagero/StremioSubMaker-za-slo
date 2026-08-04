@@ -94,7 +94,8 @@ class RedisStorageAdapter extends StorageAdapter {
     } else {
       // Standard Redis configuration (default for single-user deployments)
       this.options = {
-        host: restOptions.host || process.env.REDIS_HOST || 'localhost',
+        ...(restOptions.url || process.env.REDIS_URL ? { url: restOptions.url || process.env.REDIS_URL } : {}),
+        host: restOptions.host || process.env.REDIS_HOST || process.env.REDISHOST || 'localhost',
         port: restOptions.port || process.env.REDIS_PORT || 6379,
         password: restOptions.password || getRedisPassword() || undefined,
         db: restOptions.db || process.env.REDIS_DB || 0,

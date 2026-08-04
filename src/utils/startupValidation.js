@@ -41,9 +41,16 @@ class StartupValidator {
       return true;
     }
 
+    const hasRedisConfig = Boolean(process.env.REDIS_URL || process.env.REDIS_HOST || process.env.REDISHOST);
+    if (!hasRedisConfig) {
+      this.warnings.push('STORAGE_TYPE=redis but no Redis endpoint is configured; use STORAGE_TYPE=filesystem or provision Redis.');
+      return true;
+    }
+
     try {
       const redisOptions = {
-        host: process.env.REDIS_HOST || 'localhost',
+        ...(process.env.REDIS_URL ? { url: process.env.REDIS_URL } : {}),
+        host: process.env.REDIS_HOST || process.env.REDISHOST || 'localhost',
         port: process.env.REDIS_PORT || 6379,
         password: getRedisPassword() || undefined,
         db: process.env.REDIS_DB ? parseInt(process.env.REDIS_DB, 10) : 0,

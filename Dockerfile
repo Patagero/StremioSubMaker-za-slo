@@ -45,7 +45,8 @@ RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 #     - PUID=1000
 #     - PGID=1000
 
-# Expose port (default 7001)
+# Render and similar platforms provide PORT at runtime.
+# The application already reads process.env.PORT, so keep the image metadata generic.
 EXPOSE 7001
 
 # Health check

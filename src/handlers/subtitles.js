@@ -4491,7 +4491,7 @@ async function handleTranslation(sourceFileId, targetLanguage, config, options =
           }
 
           // No cached/partial result yet - return loading message and let user retry
-          const loadingMsg = createLoadingSubtitle(config.uiLanguage || 'en');
+          const loadingMsg = createLoadingSubtitle(config.uiLanguage || 'en', partialResult?.progress);
           log.debug(() => `[Translation] No partial result yet for duplicate request; returning loading message`);
           return loadingMsg;
         }
@@ -4593,7 +4593,7 @@ async function handleTranslation(sourceFileId, targetLanguage, config, options =
               return partial.content;
             }
           } catch (_) { }
-          const loadingMsg = createLoadingSubtitle(config.uiLanguage || 'en');
+          const loadingMsg = createLoadingSubtitle(config.uiLanguage || 'en', status?.progress);
           log.debug(() => `[Translation] No partial available, returning loading SRT (size=${loadingMsg.length})`);
           return loadingMsg;
         }
@@ -4809,7 +4809,7 @@ async function handleTranslation(sourceFileId, targetLanguage, config, options =
     }
 
     // Return loading message immediately (desktop/standard behavior)
-    const loadingMsg = createLoadingSubtitle(config.uiLanguage || 'en');
+    const loadingMsg = createLoadingSubtitle(config.uiLanguage || 'en', { completedEntries: 0, totalEntries: 0 });
     log.debug(() => `[Translation] Returning initial loading message (${loadingMsg.length} characters)`);
     return loadingMsg;
   } catch (error) {
@@ -5143,6 +5143,13 @@ async function performTranslation(sourceFileId, targetLanguage, config, { cacheK
               try {
                 await saveToPartialCacheAsync(runtimeKey, {
                   content: partialSrt,
+                  progress: {
+                    completedEntries: progress.completedEntries || 0,
+                    totalEntries: progress.totalEntries || 0,
+                    currentBatch: progress.currentBatch || 0,
+                    totalBatches: progress.totalBatches || 0,
+                    updatedAt: Date.now()
+                  },
                   isComplete: false,
                   expiresAt: Date.now() + 60 * 60 * 1000
                 });

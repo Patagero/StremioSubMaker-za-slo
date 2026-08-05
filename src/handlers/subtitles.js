@@ -806,11 +806,18 @@ function buildSubtitleSearchContextKey({ streamFilename = '', videoHash = '', vi
  * Create a single-cue loading subtitle that explains partial loading
  * @returns {string} - SRT formatted loading subtitle
  */
-function createLoadingSubtitle(uiLanguage = 'en') {
+function createLoadingSubtitle(uiLanguage = 'en', progress = null) {
   const t = getTranslator(uiLanguage);
+  const completed = Number(progress?.completedEntries) || 0;
+  const total = Number(progress?.totalEntries) || 0;
+  const percent = total > 0 ? Math.round((completed / total) * 100) : 0;
+  const width = 20;
+  const filled = Math.round((percent / 100) * width);
+  const bar = `[${'='.repeat(filled)}${'-'.repeat(width - filled)}] ${percent}% (${completed}/${total})`;
   const srt = `1
 00:00:00,000 --> 04:00:00,000
 ${t('subtitle.loadingTitle', {}, 'TRANSLATION IN PROGRESS')}
+${bar}
 ${t('subtitle.loadingBody', {}, 'Translation is running. Re-select this same subtitle after a few seconds to load the latest progress.')}`;
 
   // Log the loading subtitle for debugging
@@ -839,8 +846,14 @@ function msToSrtTime(ms) {
   return `${pad(hh)}:${pad(mm)}:${pad(ss)},${String(mmm).padStart(3, '0')}`;
 }
 
-function buildPartialSrtWithTail(mergedSrt, uiLanguage = 'en') {
+function buildPartialSrtWithTail(mergedSrt, uiLanguage = 'en', progress = null) {
   const t = getTranslator(uiLanguage);
+  const completed = Number(progress?.completedEntries) || 0;
+  const total = Number(progress?.totalEntries) || 0;
+  const percent = total > 0 ? Math.round((completed / total) * 100) : 0;
+  const width = 20;
+  const filled = Math.round((percent / 100) * width);
+  const progressBar = `[${'='.repeat(filled)}${'-'.repeat(width - filled)}] ${percent}% (${completed}/${total})`;
   try {
     if (!mergedSrt || typeof mergedSrt !== 'string' || mergedSrt.trim().length === 0) {
       return null; // Nothing to work with
@@ -876,7 +889,7 @@ function buildPartialSrtWithTail(mergedSrt, uiLanguage = 'en') {
     const tail = {
       id: reindexed.length + 1,
       timecode: `${tailStart} --> 04:00:00,000`,
-      text: `${t('subtitle.loadingTitle', {}, 'TRANSLATION IN PROGRESS')}\n${t('subtitle.loadingTail', {}, 'Reload this subtitle later to get more')}`
+      text: `${t('subtitle.loadingTitle', {}, 'TRANSLATION IN PROGRESS')}\n${progressBar}\n${t('subtitle.loadingTail', {}, 'Re-select this same subtitle later to load more translated lines')}`
     };
     const full = [...reindexed, tail];
     return toSRT(full);
@@ -5116,7 +5129,7 @@ async function performTranslation(sourceFileId, targetLanguage, config, { cacheK
           let skippedDuplicatePayload = false;
           const persistPartial = async (partialText) => {
             if (partialDeliveryDisabled) return false;
-            const partialSrt = buildPartialSrtWithTail(partialText, config.uiLanguage || 'en');
+            const partialSrt = buildPartialSrtWithTail(partialText, config.uiLanguage || 'en', progress);
             if (!partialSrt || partialSrt.length === 0) return false;
             const partialFingerprint = crypto.createHash('sha1').update(partialSrt).digest('hex');
             if (partialFingerprint && partialFingerprint === lastPartialSavedFingerprint) {

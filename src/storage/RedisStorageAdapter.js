@@ -57,7 +57,7 @@ class RedisStorageAdapter extends StorageAdapter {
     // honor other option fields, but keyPrefix must remain the canonical
     // colon-suffixed value so reads/writes stay in the same namespace across
     // restarts and deployments.
-    const { keyPrefix: _ignoredKeyPrefix, ...restOptions } = options || {};
+    const { keyPrefix: _ignoredKeyPrefix, url: redisUrl, ...restOptions } = options || {};
     const commandTimeout = parsePositiveIntEnv('REDIS_COMMAND_TIMEOUT_MS', DEFAULT_REDIS_COMMAND_TIMEOUT_MS);
 
     if (sentinelEnabled) {
@@ -94,7 +94,7 @@ class RedisStorageAdapter extends StorageAdapter {
     } else {
       // Standard Redis configuration (default for single-user deployments)
       this.options = {
-        ...(restOptions.url || process.env.REDIS_URL ? { url: restOptions.url || process.env.REDIS_URL } : {}),
+        ...(redisUrl || process.env.REDIS_URL ? { url: redisUrl || process.env.REDIS_URL } : {}),
         host: restOptions.host || process.env.REDIS_HOST || process.env.REDISHOST || 'localhost',
         port: restOptions.port || process.env.REDIS_PORT || 6379,
         password: restOptions.password || getRedisPassword() || undefined,

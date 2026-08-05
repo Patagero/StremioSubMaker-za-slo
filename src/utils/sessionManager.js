@@ -420,7 +420,8 @@ async function getPubSubClient() {
             };
         } else {
             clientOptions = {
-                host: process.env.REDIS_HOST || 'localhost',
+                ...(process.env.REDIS_URL ? { url: process.env.REDIS_URL } : {}),
+                host: process.env.REDIS_HOST || process.env.REDISHOST || 'localhost',
                 port: process.env.REDIS_PORT || 6379,
                 password,
                 db: process.env.REDIS_DB ? parseInt(process.env.REDIS_DB, 10) : 0,
@@ -483,7 +484,8 @@ async function getPublishClient() {
             };
         } else {
             clientOptions = {
-                host: process.env.REDIS_HOST || 'localhost',
+                ...(process.env.REDIS_URL ? { url: process.env.REDIS_URL } : {}),
+                host: process.env.REDIS_HOST || process.env.REDISHOST || 'localhost',
                 port: process.env.REDIS_PORT || 6379,
                 password,
                 db: process.env.REDIS_DB ? parseInt(process.env.REDIS_DB, 10) : 0,

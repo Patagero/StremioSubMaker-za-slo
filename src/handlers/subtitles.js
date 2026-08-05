@@ -21,8 +21,6 @@ const syncCache = require('../utils/syncCache');
 const autoSubCache = require('../utils/autoSubCache');
 const streamActivity = require('../utils/streamActivity');
 const embeddedCache = require('../utils/embeddedCache');
-const { detectEmbeddedSubtitleFormat } = require('../utils/embeddedSubtitleDelivery');
-const { probeStream, extractSubtitle, selectPreferredEnglishTrack } = require('../services/embeddedStreamSubtitles');
 const smdbCache = require('../utils/smdbCache');
 const { resolveLocalSubtitleHashes, persistLocalHashAssociations } = require('../utils/localSubtitleHashResolver');
 const { StorageFactory, StorageAdapter } = require('../storage');
@@ -813,7 +811,7 @@ function createLoadingSubtitle(uiLanguage = 'en') {
   const srt = `1
 00:00:00,000 --> 04:00:00,000
 ${t('subtitle.loadingTitle', {}, 'TRANSLATION IN PROGRESS')}
-${t('subtitle.loadingBody', {}, 'Click the same subtitle to reload. Partial results will appear as they are ready.')}`;
+${t('subtitle.loadingBody', {}, 'Translation is running. Re-select this same subtitle after a few seconds to load the latest progress.')}`;
 
   // Log the loading subtitle for debugging
   log.debug(() => ['[Subtitles] Created loading subtitle with', srt.split('\n\n').length, 'entries']);
@@ -2685,16 +2683,7 @@ function createSubtitleHandler(config) {
 
       log.debug(() => `[Subtitles] Video info: ${JSON.stringify(videoInfo)}`);
       const streamFilename = (extra?.filename || '').toString().trim();
-      const embeddedStreamUrl = String(
-        extra?.streamUrl
-        || extra?.streamURL
-        || extra?.videoUrl
-        || extra?.videoURL
-        || extra?.stream_url
-        || extra?.video_url
-        || extra?.url
-        || ''
-      ).trim();
+
 
       await resolveVideoInfoForSearch(videoInfo, type, 'Subtitles', { streamFilename });
 
@@ -3235,42 +3224,13 @@ function createSubtitleHandler(config) {
         log.debug(() => `[Subtitles] Local hash expansion: ${localHashLookup.directHashes.length} direct -> ${videoHashes.length} total hashes`);
       }
 
-      // Preload embedded originals AND translations in parallel (used for display + translation sources)
-      // Performance: Single parallel fetch avoids multiple sequential calls later
+      // Embedded subtitle discovery/extraction is intentionally handled by the
+      // player-side component, not this Stremio addon. The addon searches only
+      // the providers selected in configuration.
+      // Embedded subtitles are not part of the addon provider list.
+      // Keep these maps only for backwards-compatible helper routes.
       const embeddedOriginalsByHash = new Map();
       const embeddedTranslationsByHash = new Map();
-      if (videoHashes.length) {
-        const preloadPromises = [];
-        for (const hash of videoHashes) {
-          // Preload originals
-          preloadPromises.push(
-            embeddedCache.listEmbeddedOriginals(hash)
-              .then(originals => ({ type: 'original', hash, data: originals || [] }))
-              .catch(error => {
-                log.error(() => [`[Subtitles] Failed to load xEmbed originals for ${hash}:`, error.message]);
-                return { type: 'original', hash, data: [] };
-              })
-          );
-          // Preload translations in parallel
-          preloadPromises.push(
-            embeddedCache.listEmbeddedTranslations(hash)
-              .then(translations => ({ type: 'translation', hash, data: translations || [] }))
-              .catch(error => {
-                log.error(() => [`[Subtitles] Failed to load xEmbed translations for ${hash}:`, error.message]);
-                return { type: 'translation', hash, data: [] };
-              })
-          );
-        }
-        // Execute all preloads in parallel
-        const preloadResults = await Promise.all(preloadPromises);
-        for (const result of preloadResults) {
-          if (result.type === 'original') {
-            embeddedOriginalsByHash.set(result.hash, result.data);
-          } else {
-            embeddedTranslationsByHash.set(result.hash, result.data);
-          }
-        }
-      }
 
       // Add translation buttons for each target language (skip in no-translation mode)
       const translationEntries = [];
@@ -3299,47 +3259,9 @@ function createSubtitleHandler(config) {
           })
         );
 
-        // Add embedded originals as source subtitles when they match configured source languages
+        // Embedded sources are deliberately excluded: this addon only searches
+        // configured internet subtitle providers.
         const embeddedSourceSubtitles = [];
-        if (embeddedStreamUrl && config.sourceLanguages.some(sourceLang => ['en', 'eng'].includes(normalizeLanguageCode(sourceLang)))) {
-          try {
-            const embeddedTracks = await probeStream(embeddedStreamUrl);
-            const preferredTrack = selectPreferredEnglishTrack(embeddedTracks);
-            if (preferredTrack) {
-              const embeddedContent = await extractSubtitle(embeddedStreamUrl, preferredTrack.streamIndex);
-              const embeddedHash = deriveVideoHash(streamFilename || embeddedStreamUrl, id);
-              const saved = await embeddedCache.saveOriginalEmbedded(
-                embeddedHash,
-                `stream_${preferredTrack.streamIndex}`,
-                preferredTrack.language || 'eng',
-                embeddedContent,
-                { sourceFormat: 'srt', codec: preferredTrack.codec, title: preferredTrack.title, streamUrl: embeddedStreamUrl }
-              );
-              embeddedSourceSubtitles.push({
-                fileId: `xembed_${saved.cacheKey}`,
-                languageCode: normalizeLanguageCode(preferredTrack.language || 'eng') || 'eng'
-              });
-              log.info(() => `[Subtitles] Added embedded stream subtitle track ${preferredTrack.streamIndex} as a translation source`);
-            }
-          } catch (error) {
-            log.warn(() => `[Subtitles] Embedded stream fallback unavailable: ${error.message}`);
-          }
-        }
-        for (const hash of videoHashes) {
-          const originals = embeddedOriginalsByHash.get(hash) || [];
-          for (const entry of originals) {
-            if (!entry || !entry.trackId) continue;
-            const normalizedSource = normalizeLanguageCode(entry.languageCode || '');
-            if (!normalizedSource) continue;
-            const isAllowedSource = config.sourceLanguages.some(sourceLang => normalizeLanguageCode(sourceLang) === normalizedSource);
-            if (!isAllowedSource) continue;
-            const embeddedFileId = entry.cacheKey ? `xembed_${entry.cacheKey}` : `xembed_${hash}_${entry.trackId}`;
-            embeddedSourceSubtitles.push({
-              fileId: embeddedFileId,
-              languageCode: normalizedSource
-            });
-          }
-        }
 
         // Merge provider + embedded sources without duplication
         const seenSourceIds = new Set(providerSourceSubtitles.map(sub => sub.fileId));
@@ -3584,64 +3506,10 @@ function createSubtitleHandler(config) {
         }
       }
 
-      // Add xEmbed entries (translated embedded tracks from cache)
-      // Performance: Reuse pre-fetched Maps instead of calling cache again
+      // Embedded subtitle entries are intentionally omitted from this addon.
+      // The player-side integration owns embedded track discovery and translation.
       const xEmbedEntries = [];
       const xEmbedOriginalEntries = [];
-      if (videoHashes.length && expandedLangs.size > 0) {
-        try {
-          const seenKeys = new Set();
-          const seenOriginals = new Set();
-          for (const hash of videoHashes) {
-            // Use pre-cached translations (fetched earlier in parallel)
-            const translations = embeddedTranslationsByHash.get(hash) || [];
-            for (const entry of translations) {
-              if (!entry || !entry.trackId) continue;
-              const targetCode = (entry.targetLanguageCode || entry.languageCode || '').toString().toLowerCase();
-              if (!targetCode) continue;
-              const normalizedTarget = normalizeLanguageCode(targetCode);
-              if (!normalizedTarget || !expandedLangs.has(normalizedTarget)) continue; // only show for configured languages
-              const dedupeKey = `${entry.trackId}_${targetCode}`;
-              if (seenKeys.has(dedupeKey)) continue;
-              seenKeys.add(dedupeKey);
-
-              const langName = getLanguageName(normalizedTarget) || getLanguageName(targetCode) || targetCode;
-              xEmbedEntries.push({
-                id: `xembed_${entry.cacheKey}`,
-                lang: `xEmbed (${langName})`,
-                url: `{{ADDON_URL}}/xembedded/${toPathSegment(hash)}/${toPathSegment(targetCode)}/${toPathSegment(entry.trackId)}`
-              });
-            }
-
-            // Use pre-cached originals (fetched earlier in parallel) - avoids duplicate call!
-            const originals = embeddedOriginalsByHash.get(hash) || [];
-            for (const entry of originals) {
-              if (!entry || !entry.trackId) continue;
-              const sourceCode = (entry.languageCode || '').toString().toLowerCase();
-              if (!sourceCode) continue;
-              const normalizedSource = normalizeLanguageCode(sourceCode);
-              if (!normalizedSource || !expandedLangs.has(normalizedSource)) continue; // only show for configured languages
-              const dedupeKey = `${entry.trackId}_${sourceCode}`;
-              if (seenOriginals.has(dedupeKey)) continue;
-              seenOriginals.add(dedupeKey);
-
-              xEmbedOriginalEntries.push({
-                id: `xembed_orig_${entry.cacheKey}`,
-                lang: sourceCode,
-                url: `{{ADDON_URL}}/xembedded/${toPathSegment(hash)}/${toPathSegment(sourceCode)}/${toPathSegment(entry.trackId)}/original`
-              });
-            }
-          }
-          if (xEmbedEntries.length > 0) {
-            log.debug(() => `[Subtitles] Added ${xEmbedEntries.length} xEmbed entries`);
-          }
-          if (xEmbedOriginalEntries.length > 0) {
-            log.debug(() => `[Subtitles] Added ${xEmbedOriginalEntries.length} xEmbed original entries`);
-          }
-        } catch (error) {
-          log.error(() => [`[Subtitles] Failed to get xEmbed entries for ${videoHashes.join(',')}:`, error.message]);
-        }
-      }
 
       // ── SMDB entries (community-uploaded subtitles) ──────────────────────────
       const smdbEntries = [];
@@ -3681,15 +3549,15 @@ function createSubtitleHandler(config) {
         }
       }
 
-      // Add special action buttons
+      // Add special action buttons. Embedded entries are excluded from this
+      // addon; they are provided by the external/player-side integration.
       let allSubtitles = [
         ...stremioSubtitles,
         ...translationEntries,
         ...learnEntries,
         ...xSyncEntries,
         ...autoEntries,
-        ...xEmbedOriginalEntries,
-        ...xEmbedEntries,
+        // no embedded subtitle entries
         ...smdbEntries
       ];
 

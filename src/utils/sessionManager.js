@@ -1145,7 +1145,10 @@ class SessionManager extends EventEmitter {
         this.cache.set(token, sessionData);
         // In Redis mode we persist/touch per access already; avoid marking dirty to
         // prevent periodic full flushes that rewrite all sessions unnecessarily.
-        if ((process.env.STORAGE_TYPE || 'redis') !== 'redis') {
+        const configuredStorageType = String(process.env.STORAGE_TYPE || '').trim().toLowerCase();
+        const hasRedisConfig = Boolean(process.env.REDIS_URL || process.env.REDIS_HOST || process.env.REDISHOST);
+        const effectiveStorageType = configuredStorageType || (hasRedisConfig ? 'redis' : 'filesystem');
+        if (effectiveStorageType !== 'redis') {
             this.dirty = true;
         }
 

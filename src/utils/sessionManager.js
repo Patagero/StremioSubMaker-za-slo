@@ -789,7 +789,10 @@ class SessionManager extends EventEmitter {
      * @private
      */
     async _publishInvalidation(token, action) {
-        if ((process.env.STORAGE_TYPE || 'redis') !== 'redis') {
+        const configuredStorageType = String(process.env.STORAGE_TYPE || '').trim().toLowerCase();
+        const hasRedisConfig = Boolean(process.env.REDIS_URL || process.env.REDIS_HOST || process.env.REDISHOST);
+        const effectiveStorageType = configuredStorageType || (hasRedisConfig ? 'redis' : 'filesystem');
+        if (effectiveStorageType !== 'redis') {
             return; // Only in Redis mode
         }
 
